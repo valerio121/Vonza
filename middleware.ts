@@ -1,5 +1,5 @@
-import { NextRequest, NextResponse } from "next/server";
 import { getToken } from "next-auth/jwt";
+import { NextRequest, NextResponse } from "next/server";
 
 export const config = {
   matcher: [
@@ -15,12 +15,15 @@ export const config = {
 };
 
 export default async function middleware(req: NextRequest) {
-  const url = req.nextUrl;
+  const url = new URL(req.nextUrl);
+
+  if (process.env.VERCEL_ENV != "production" && !url.searchParams.has("host")) {
+    url.searchParams.set("host", "app");
+    return NextResponse.redirect(url);
+  }
 
   // Get hostname of request (e.g. demo.vercel.pub, demo.localhost:3000)
-  const hostname = req.headers
-    .get("host")!
-    .replace(".localhost:3000", `.${process.env.NEXT_PUBLIC_ROOT_DOMAIN}`);
+  const subdomain = url.searchParams.get("host") ?? req.headers.get("host")!;
 
   const searchParams = req.nextUrl.searchParams.toString();
   // Get the pathname of the request (e.g. /, /about, /blog/first-post)
@@ -29,29 +32,25 @@ export default async function middleware(req: NextRequest) {
   }`;
 
   // rewrites for app pages
-  if (hostname == `app.${process.env.NEXT_PUBLIC_ROOT_DOMAIN}`) {
+  if (subdomain == "app") {
     const session = await getToken({ req });
     if (!session && path !== "/login") {
       return NextResponse.redirect(new URL("/login", req.url));
     } else if (session && path == "/login") {
       return NextResponse.redirect(new URL("/", req.url));
     }
-    return NextResponse.rewrite(
-      new URL(`/app${path === "/" ? "" : path}`, req.url),
-    );
+    return rewrite(`/app${path === "/" ? "" : path}`, req);
   }
-
   // special case for `vercel.pub` domain
-  if (hostname === "vercel.pub") {
+  if (subdomain === "vercel.pub") {
     return NextResponse.redirect(
       "https://vercel.com/blog/platforms-starter-kit",
     );
   }
 
   // rewrite root application to `/home` folder
-  if (
-    hostname === "localhost:3000" ||
-    hostname === process.env.NEXT_PUBLIC_ROOT_DOMAIN
+  if (subdomain === "" || subdomain === "www") {
+    return rewrite(`/home${path}`, req);
   ) {
     return NextResponse.rewrite(
       new URL(`/home${path === "/" ? "" : path}`, req.url),
@@ -59,5 +58,12 @@ export default async function middleware(req: NextRequest) {
   }
 
   // rewrite everything else to `/[domain]/[path] dynamic route
-  return NextResponse.rewrite(new URL(`/${hostname}${path}`, req.url));
+  return rewrite(`/${subdomain}${path}`, req);
 }
+
+const rewrite = (url: string, req: NextRequest) => {
+  const rewrite = new URL(url, req.url);
+  const res = NextResponse.rewrite(rewrite);
+  res.headers.set("x-rewrite", rewrite.toString());
+  return res;
+};
